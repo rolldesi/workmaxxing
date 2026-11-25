@@ -15,6 +15,13 @@ cd "$DIR/../.."
 TAG="${WORKMAXXING_TAG:-wm}"
 CONFIG="${WORKMAXXING_CONFIG:-Release}"
 OUT="$(mktemp -t workmaxxing-build)"
+# This repo's history starts at a fresh import, so reload.sh can't look up
+# cmux's published cmux-tui client by commit. Reuse a saved client instead
+# (copied from an earlier build; Workmaxxing doesn't change cmux-tui).
+TUI_CLIENT="${WORKMAXXING_TUI_CLIENT:-$HOME/Library/Application Support/Workmaxxing/cmux-tui}"
+if [ -z "${CMUX_TUI_CLIENT_LOCAL:-}" ] && [ -x "$TUI_CLIENT" ]; then
+  export CMUX_TUI_CLIENT_LOCAL="$TUI_CLIENT"
+fi
 RELEASE_FLAG=()
 [ "$CONFIG" = "Release" ] && RELEASE_FLAG=(--release)
 # Workmaxxing doesn't use cmux Cloud's VPN tunnel: build its stub engine

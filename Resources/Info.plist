@@ -178,6 +178,16 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).spotify</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>cmux-spotify</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
 			<string>$(PRODUCT_BUNDLE_IDENTIFIER).web</string>
 			<key>CFBundleURLSchemes</key>
 			<array>

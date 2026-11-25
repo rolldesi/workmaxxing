@@ -1,5 +1,4 @@
 import AppKit
-import AuthenticationServices
 import CryptoKit
 import Foundation
 import Security
@@ -34,7 +33,8 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
 
     private var accessToken: String?
     private var accessTokenExpiry = Date.distantPast
-    private var authSession: ASWebAuthenticationSession?
+    /// The PKCE verifier and state of the sign-in waiting for its browser callback.
+    private var pendingSignIn: (verifier: String, state: String)?
 
     override init() {
         clientId = UserDefaults.standard.string(forKey: Self.clientIdKey) ?? ""
@@ -48,6 +48,7 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
         let trimmedClientId = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedClientId.isEmpty else { return }
         let verifier = Self.randomURLSafeString(byteCount: 64)
+        let state = Self.randomURLSafeString(byteCount: 16)
         let challenge = Self.base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
         var components = URLComponents(string: "https://accounts.spotify.com/authorize")
         components?.queryItems = [
@@ -57,25 +58,34 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "scope", value: Self.scopes),
+            URLQueryItem(name: "state", value: state),
         ]
         guard let url = components?.url else { return }
-        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: Self.callbackScheme) { callback, error in
-            let code = callback.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?
-                .queryItems?.first { $0.name == "code" }?.value
-            let failure = error?.localizedDescription
-            Task { @MainActor in
-                let api = SpotifyWebAPI.shared
-                api.authSession = nil
-                guard let code else {
-                    api.lastError = failure ?? String(localized: "spotify.api.signInCancelled", defaultValue: "Spotify sign-in was cancelled.")
-                    return
-                }
-                await api.exchange(code: code, verifier: verifier)
-            }
+        // Sign in in the default browser; Spotify redirects to cmux-spotify://callback,
+        // which macOS hands back to this app (AppDelegate.application(_:open:)).
+        pendingSignIn = (verifier, state)
+        if !NSWorkspace.shared.open(url) {
+            pendingSignIn = nil
+            lastError = String(localized: "spotify.api.browserFailed", defaultValue: "Couldn't open the browser for Spotify sign-in.")
         }
-        session.presentationContextProvider = self
-        authSession = session
-        session.start()
+    }
+
+    /// Finishes a browser sign-in from its cmux-spotify://callback URL.
+    func handleCallback(_ url: URL) {
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        guard let pending = pendingSignIn,
+              items.first(where: { $0.name == "state" })?.value == pending.state else {
+            lastError = String(localized: "spotify.api.staleCallback", defaultValue: "That Spotify sign-in link is stale. Click Connect again.")
+            return
+        }
+        pendingSignIn = nil
+        guard let code = items.first(where: { $0.name == "code" })?.value else {
+            lastError = items.first(where: { $0.name == "error" })?.value
+                ?? String(localized: "spotify.api.signInCancelled", defaultValue: "Spotify sign-in was cancelled.")
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        Task { await exchange(code: code, verifier: pending.verifier) }
     }
 
     func signOut() {
@@ -328,12 +338,6 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
             let type: String
         }
         let devices: [Device]
-    }
-}
-
-extension SpotifyWebAPI: ASWebAuthenticationPresentationContextProviding {
-    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        MainActor.assumeIsolated { NSApp.keyWindow ?? NSApp.mainWindow ?? NSWindow() }
     }
 }
 

@@ -1621,6 +1621,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        // Fork: Spotify's browser sign-in returns here as cmux-spotify://callback.
+        let spotifyCallbacks = urls.filter { $0.scheme == SpotifyWebAPI.callbackScheme }
+        spotifyCallbacks.forEach { SpotifyWebAPI.shared.handleCallback($0) }
+        guard spotifyCallbacks.count < urls.count else { return }
         #if DEBUG
         AuthDebugLog().log("auth.openURLs.received count=\(urls.count) summaries=\(urls.map(Self.authURLDebugSummary).joined(separator: "|"))")
         #endif

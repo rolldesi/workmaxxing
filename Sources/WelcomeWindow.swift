@@ -98,7 +98,18 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
         return try? JSONDecoder().decode(CmuxLayoutNode.self, from: data)
     }
 
-    /// Where Clone and New project put folders.
+    /// Folders that hold projects, by name, for New project, Clone and the list filter.
+    static var projectRoots: [(name: String, path: String)] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            (String(localized: "welcome.root.projects", defaultValue: "Projects"), "Desktop/Projects"),
+            (String(localized: "welcome.root.fullScale", defaultValue: "Full Scale Projects"), "Desktop/Full Scale Projects"),
+        ]
+        .map { ($0.0, (home as NSString).appendingPathComponent($0.1)) }
+        .filter { FileManager.default.fileExists(atPath: $0.1) }
+    }
+
+    /// Default folder for the Open panel.
     static var projectsRoot: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let preferred = (home as NSString).appendingPathComponent("Desktop/Projects")
@@ -126,6 +137,8 @@ private struct WelcomeView: View {
     @State private var showsAll = false
     @State private var busy: String?
     @State private var problem: String?
+    /// The list filter: nil shows every project, else one root's path.
+    @State private var rootFilter: String?
 
     private static let agentChoices = [0, 1, 2, 3, 4, 6, 8]
     private static let recentLimit = 5
@@ -231,6 +244,18 @@ private struct WelcomeView: View {
                     .font(.system(size: 12))
                 }
             }
+            if WelcomeWindowController.projectRoots.count > 1 {
+                Picker("", selection: $rootFilter) {
+                    Text(String(localized: "welcome.root.all", defaultValue: "All")).tag(String?.none)
+                    ForEach(WelcomeWindowController.projectRoots, id: \.path) { root in
+                        Text(root.name).tag(Optional(root.path))
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(maxWidth: 360)
+            }
             if showsAll {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -241,7 +266,7 @@ private struct WelcomeView: View {
                 .padding(.vertical, 7)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
             }
-            let rows = showsAll ? filtered(allFolders) : Array(allFolders.prefix(Self.recentLimit))
+            let rows = showsAll ? filtered(inSelectedRoot(allFolders)) : Array(inSelectedRoot(allFolders).prefix(Self.recentLimit))
             if rows.isEmpty {
                 Text(String(localized: "welcome.empty", defaultValue: "No projects yet. Open or clone one above."))
                     .font(.system(size: 12, weight: .light))
@@ -283,6 +308,12 @@ private struct WelcomeView: View {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return folders }
         return folders.filter { $0.name.localizedCaseInsensitiveContains(trimmed) || $0.parent.localizedCaseInsensitiveContains(trimmed) }
+    }
+
+    /// Projects under the root the filter selects.
+    private func inSelectedRoot(_ folders: [WelcomeFolder]) -> [WelcomeFolder] {
+        guard let rootFilter else { return folders }
+        return folders.filter { $0.path.hasPrefix(rootFilter + "/") }
     }
 
     private func load() async {
@@ -327,21 +358,20 @@ private struct WelcomeView: View {
     }
 
     private func cloneRepo() {
-        guard let url = Self.ask(
+        guard let answer = Self.ask(
             title: String(localized: "welcome.clone.title", defaultValue: "Clone a repository"),
-            message: String(
-                format: String(localized: "welcome.clone.message", defaultValue: "Paste a git URL. It is cloned into %@."),
-                (WelcomeWindowController.projectsRoot as NSString).abbreviatingWithTildeInPath
-            ),
+            message: String(localized: "welcome.clone.message", defaultValue: "Paste a git URL and choose where to put it."),
             placeholder: "https://github.com/owner/repo.git"
         ) else { return }
+        let url = answer.value
+        let root = answer.root
         let name = URL(string: url)?.deletingPathExtension().lastPathComponent
             ?? (url as NSString).lastPathComponent.replacingOccurrences(of: ".git", with: "")
         guard !name.isEmpty, !name.hasPrefix("-"), name != ".", name != "..", !name.contains("/") else {
             problem = String(localized: "welcome.clone.badURL", defaultValue: "That doesn't look like a git URL.")
             return
         }
-        let destination = (WelcomeWindowController.projectsRoot as NSString).appendingPathComponent(name)
+        let destination = (root as NSString).appendingPathComponent(name)
         guard !FileManager.default.fileExists(atPath: destination) else {
             launch(destination)
             return
@@ -349,7 +379,7 @@ private struct WelcomeView: View {
         busy = String(format: String(localized: "welcome.clone.busy", defaultValue: "Cloning %@…"), name)
         problem = nil
         Task {
-            let result = await Self.git(["clone", "--", url, destination], in: WelcomeWindowController.projectsRoot)
+            let result = await Self.git(["clone", "--", url, destination], in: root)
             busy = nil
             if result == nil {
                 launch(destination)
@@ -360,15 +390,14 @@ private struct WelcomeView: View {
     }
 
     private func newProject() {
-        guard let name = Self.ask(
+        guard let answer = Self.ask(
             title: String(localized: "welcome.new.title", defaultValue: "New project"),
-            message: String(
-                format: String(localized: "welcome.new.message", defaultValue: "Creates a folder in %@ and runs git init."),
-                (WelcomeWindowController.projectsRoot as NSString).abbreviatingWithTildeInPath
-            ),
+            message: String(localized: "welcome.new.message", defaultValue: "Name it and choose where it goes. Workmaxxing creates the folder and runs git init."),
             placeholder: "my-project"
-        ), !name.contains("/"), !name.hasPrefix(".") else { return }
-        let destination = (WelcomeWindowController.projectsRoot as NSString).appendingPathComponent(name)
+        ), !answer.value.contains("/"), !answer.value.hasPrefix(".") else { return }
+        let name = answer.value
+        let root = answer.root
+        let destination = (root as NSString).appendingPathComponent(name)
         do {
             try FileManager.default.createDirectory(atPath: destination, withIntermediateDirectories: false)
         } catch {
@@ -381,20 +410,40 @@ private struct WelcomeView: View {
         }
     }
 
-    /// A one-field prompt; nil when cancelled or empty.
-    private static func ask(title: String, message: String, placeholder: String) -> String? {
+    private static let lastRootKey = "cmuxFork.welcome.lastRoot"
+
+    /// A text field plus a location (Projects, Full Scale Projects); nil when
+    /// cancelled or empty. Remembers the location for next time.
+    private static func ask(title: String, message: String, placeholder: String) -> (value: String, root: String)? {
+        let roots = WelcomeWindowController.projectRoots
+        let fallback = FileManager.default.homeDirectoryForCurrentUser.path
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        let field = NSTextField(frame: NSRect(x: 0, y: 30, width: 320, height: 24))
         field.placeholderString = placeholder
-        alert.accessoryView = field
+        let location = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 26), pullsDown: false)
+        for root in roots {
+            location.addItem(withTitle: "\(root.name)  —  \((root.path as NSString).abbreviatingWithTildeInPath)")
+        }
+        if roots.isEmpty { location.addItem(withTitle: (fallback as NSString).abbreviatingWithTildeInPath) }
+        if let last = UserDefaults.standard.string(forKey: lastRootKey),
+           let index = roots.firstIndex(where: { $0.path == last }) {
+            location.selectItem(at: index)
+        }
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 56))
+        accessory.addSubview(field)
+        accessory.addSubview(location)
+        alert.accessoryView = accessory
         alert.addButton(withTitle: String(localized: "welcome.ok", defaultValue: "Continue"))
         alert.addButton(withTitle: String(localized: "welcome.cancel", defaultValue: "Cancel"))
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
+        guard !value.isEmpty else { return nil }
+        let root = roots.isEmpty ? fallback : roots[max(0, location.indexOfSelectedItem)].path
+        UserDefaults.standard.set(root, forKey: lastRootKey)
+        return (value, root)
     }
 
     /// Runs git with arguments (never a shell). Returns nil on success, else the error text.

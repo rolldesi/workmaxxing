@@ -1622,6 +1622,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: NSApplication, open urls: [URL]) {
         // Fork: Spotify's browser sign-in returns here as cmux-spotify://callback.
+        SpotifyWebAPI.trace("app: open urls schemes=\(urls.compactMap(\.scheme).joined(separator: ","))")
         let spotifyCallbacks = urls.filter { $0.scheme == SpotifyWebAPI.callbackScheme }
         spotifyCallbacks.forEach { SpotifyWebAPI.shared.handleCallback($0) }
         guard spotifyCallbacks.count < urls.count else { return }

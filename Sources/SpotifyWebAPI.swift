@@ -13,6 +13,22 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
     static let callbackScheme = "cmux-spotify"
     static let redirectURI = "cmux-spotify://callback"
     private static let clientIdKey = "cmuxFork.spotify.clientId"
+    /// Sign-in trace: one line per step in ~/Library/Application Support/Workmaxxing/spotify-trace.log.
+    // ponytail: unbounded append; a sign-in writes a handful of lines.
+    static func trace(_ line: String) {
+        let folder = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Workmaxxing", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("spotify-trace.log")
+        let data = Data("\(ISO8601DateFormatter().string(from: Date())) \(line)\n".utf8)
+        if let handle = try? FileHandle(forWritingTo: file) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: file)
+        }
+    }
     private static let scopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing"
 
     struct Track: Identifiable, Hashable {
@@ -64,7 +80,9 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
         // Sign in in the default browser; Spotify redirects to cmux-spotify://callback,
         // which macOS hands back to this app (AppDelegate.application(_:open:)).
         pendingSignIn = (verifier, state)
+        Self.trace("signIn: opening browser for authorize (redirect \(Self.redirectURI))")
         if !NSWorkspace.shared.open(url) {
+            Self.trace("signIn: NSWorkspace.open failed")
             pendingSignIn = nil
             lastError = String(localized: "spotify.api.browserFailed", defaultValue: "Couldn't open the browser for Spotify sign-in.")
         }
@@ -73,6 +91,7 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
     /// Finishes a browser sign-in from its cmux-spotify://callback URL.
     func handleCallback(_ url: URL) {
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        Self.trace("callback: received, keys=\(items.map(\.name).joined(separator: ",")) pending=\(self.pendingSignIn != nil)")
         guard let pending = pendingSignIn,
               items.first(where: { $0.name == "state" })?.value == pending.state else {
             lastError = String(localized: "spotify.api.staleCallback", defaultValue: "That Spotify sign-in link is stale. Click Connect again.")
@@ -116,10 +135,12 @@ final class SpotifyWebAPI: NSObject, ObservableObject {
         request.httpBody = Data((body.percentEncodedQuery ?? "").utf8)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            Self.trace("token: \(form["grant_type"] ?? "?") -> HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let token = json["access_token"] as? String else {
                 lastError = Self.errorMessage(data) ?? String(localized: "spotify.api.tokenFailed", defaultValue: "Spotify sign-in failed.")
+                Self.trace("token: failed: \(self.lastError ?? "")")
                 if form["grant_type"] == "refresh_token" { signOut() }
                 return
             }

@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Fork: the Workmaxxing start window, shown at launch like Cursor's or
-/// Xcode's. Pick a folder on this Mac, choose how many agents, and it opens a
-/// workspace there with every box already running the agent command.
+/// Fork: the Workmaxxing start window, shown at launch. Laid out like an
+/// editor's empty window (centered column, action cards, recent projects),
+/// but every project opens as a workspace with agents already running.
 @MainActor
 final class WelcomeWindowController: NSObject, NSWindowDelegate {
     static let shared = WelcomeWindowController()
@@ -24,13 +24,14 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
             return
         }
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 600),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentViewController = NSHostingController(rootView: WelcomeView(onDone: { [weak self] in self?.close() }))
@@ -96,6 +97,13 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
         guard let data = try? JSONSerialization.data(withJSONObject: tree) else { return nil }
         return try? JSONDecoder().decode(CmuxLayoutNode.self, from: data)
     }
+
+    /// Where Clone and New project put folders.
+    static var projectsRoot: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let preferred = (home as NSString).appendingPathComponent("Desktop/Projects")
+        return FileManager.default.fileExists(atPath: preferred) ? preferred : home
+    }
 }
 
 private struct WelcomeFolder: Identifiable, Hashable, Sendable {
@@ -115,130 +123,166 @@ private struct WelcomeView: View {
     @State private var query = ""
     @State private var recents: [WelcomeFolder] = []
     @State private var projects: [WelcomeFolder] = []
-    @State private var selection: String?
+    @State private var showsAll = false
+    @State private var busy: String?
+    @State private var problem: String?
 
     private static let agentChoices = [0, 1, 2, 3, 4, 6, 8]
+    private static let recentLimit = 5
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-                .frame(width: 250)
-                .background(Color.primary.opacity(0.04))
-            Divider()
-            folderList
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                header
+                actionCards
+                agentStrip
+                if let problem {
+                    Text(problem).font(.caption).foregroundStyle(.red)
+                }
+                projectList
+                footer
+            }
+            .frame(maxWidth: 520, alignment: .leading)
+            .padding(.horizontal, 40)
+            .padding(.top, 56)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
         }
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: 640, minHeight: 560)
+        .background(Color(nsColor: .windowBackgroundColor))
         .task { await load() }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
+    // MARK: Sections
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.tint)
                 Text("Workmaxxing").font(.system(size: 26, weight: .bold))
-                Text(String(localized: "welcome.subtitle", defaultValue: "Pick a folder, launch your agents."))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
-            .padding(.top, 28)
-            Button(action: openOther) {
-                Label(String(localized: "welcome.openFolder", defaultValue: "Open Folder…"), systemImage: "folder")
-            }
-            .controlSize(.large)
-            Divider()
-            Text(String(localized: "welcome.agents", defaultValue: "Agents per folder")).font(.headline)
-            Picker("", selection: $agents) {
-                ForEach(Self.agentChoices, id: \.self) { count in
-                    Text(count == 0
-                         ? String(localized: "welcome.terminalOnly", defaultValue: "Terminal only")
-                         : String(format: String(localized: "welcome.agentCount", defaultValue: "%d agents"), count))
-                        .tag(count)
-                }
-            }
-            .labelsHidden()
-            TextField(String(localized: "welcome.command", defaultValue: "Command (e.g. claude, codex)"), text: $command)
-                .textFieldStyle(.roundedBorder)
-                .disabled(agents == 0)
-            Spacer()
-            Toggle(String(localized: "welcome.showAtLaunch", defaultValue: "Show this window at launch"), isOn: $showAtLaunch)
-                .font(.caption)
+            Text(String(localized: "welcome.subtitle", defaultValue: "Open a project and put your agents to work in parallel."))
+                .font(.system(size: 12, weight: .light))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 34)
         }
-        .padding(.horizontal, 18)
-        .padding(.bottom, 16)
     }
 
-    private var folderList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField(String(localized: "welcome.search", defaultValue: "Search projects"), text: $query)
-                    .textFieldStyle(.plain)
+    private var actionCards: some View {
+        HStack(spacing: 10) {
+            WelcomeCard(symbol: "folder", title: String(localized: "welcome.open", defaultValue: "Open project"), action: openOther)
+            WelcomeCard(symbol: "arrow.down.circle", title: String(localized: "welcome.clone", defaultValue: "Clone repo"), action: cloneRepo)
+            WelcomeCard(symbol: "plus.square", title: String(localized: "welcome.new", defaultValue: "New project"), action: newProject)
+        }
+        .disabled(busy != nil)
+        .overlay(alignment: .bottomLeading) {
+            if let busy {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(busy).font(.caption).foregroundStyle(.secondary)
+                }
+                .offset(y: 22)
             }
-            .padding(10)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-            .padding([.horizontal, .top], 16)
-            List(selection: $selection) {
-                if !filter(recents).isEmpty {
-                    Section(String(localized: "welcome.recent", defaultValue: "Recent")) {
-                        ForEach(filter(recents)) { row($0) }
+        }
+    }
+
+    private var agentStrip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(String(localized: "welcome.agents", defaultValue: "Agents per project"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Picker("", selection: $agents) {
+                    ForEach(Self.agentChoices, id: \.self) { count in
+                        Text(count == 0 ? String(localized: "welcome.terminal", defaultValue: "Terminal") : "\(count)").tag(count)
                     }
                 }
-                Section(String(localized: "welcome.projects", defaultValue: "Projects")) {
-                    ForEach(filter(projects)) { row($0) }
-                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 320)
+                TextField(String(localized: "welcome.command", defaultValue: "claude"), text: $command)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(width: 130)
+                    .disabled(agents == 0)
+                    .help(String(localized: "welcome.commandHelp", defaultValue: "Command each box runs, e.g. claude or codex"))
             }
-            .listStyle(.inset)
-            HStack {
-                Text(selection.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? String(localized: "welcome.pickOne", defaultValue: "Select a folder"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                Spacer()
-                Button(String(localized: "welcome.launch", defaultValue: "Launch")) {
-                    if let selection { launch(selection) }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(selection == nil)
-            }
-            .padding(16)
         }
     }
 
-    private func row(_ folder: WelcomeFolder) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "folder.fill").foregroundStyle(.blue)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(folder.name).lineLimit(1)
-                Text(folder.parent).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+    private var projectList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(showsAll
+                     ? String(localized: "welcome.allProjects", defaultValue: "All projects")
+                     : String(localized: "welcome.recent", defaultValue: "Recent projects"))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if allFolders.count > Self.recentLimit || showsAll {
+                    Button(showsAll
+                           ? String(localized: "welcome.showRecent", defaultValue: "Show recent")
+                           : String(format: String(localized: "welcome.viewAll", defaultValue: "View all (%d)"), allFolders.count)) {
+                        showsAll.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 12))
+                }
             }
-            Spacer()
-            Text(folder.modified, format: .relative(presentation: .named))
+            if showsAll {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField(String(localized: "welcome.search", defaultValue: "Search projects"), text: $query)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
+            }
+            let rows = showsAll ? filtered(allFolders) : Array(allFolders.prefix(Self.recentLimit))
+            if rows.isEmpty {
+                Text(String(localized: "welcome.empty", defaultValue: "No projects yet. Open or clone one above."))
+                    .font(.system(size: 12, weight: .light))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 2) {
+                    ForEach(rows) { folder in
+                        WelcomeRecentRow(folder: folder) { launch(folder.path) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Toggle(String(localized: "welcome.showAtLaunch", defaultValue: "Show at launch"), isOn: $showAtLaunch)
+                .toggleStyle(.checkbox)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Spacer()
+            Text(String(localized: "welcome.reopenHint", defaultValue: "Reopen from Apps ▸ Open Project…"))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
-        .tag(folder.path)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) { launch(folder.path) }
+        .padding(.top, 8)
     }
 
-    private func filter(_ folders: [WelcomeFolder]) -> [WelcomeFolder] {
+    // MARK: Data
+
+    /// Recent first, then other projects by last change, without duplicates.
+    private var allFolders: [WelcomeFolder] {
+        let recentPaths = Set(recents.map(\.path))
+        return recents + projects.filter { !recentPaths.contains($0.path) }
+    }
+
+    private func filtered(_ folders: [WelcomeFolder]) -> [WelcomeFolder] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return folders }
         return folders.filter { $0.name.localizedCaseInsensitiveContains(trimmed) || $0.parent.localizedCaseInsensitiveContains(trimmed) }
-    }
-
-    private func launch(_ path: String) {
-        WelcomeWindowController.launch(folder: path, agents: agents, command: command)
-        onDone()
-    }
-
-    private func openOther() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        launch(url.path)
     }
 
     private func load() async {
@@ -256,14 +300,183 @@ private struct WelcomeView: View {
             let recents = recentPaths.compactMap(folder)
             let projects = roots.flatMap { root -> [WelcomeFolder] in
                 let children = (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []
-                return children
-                    .filter { !$0.hasPrefix(".") }
-                    .compactMap { folder((root as NSString).appendingPathComponent($0)) }
+                return children.filter { !$0.hasPrefix(".") }.compactMap { folder((root as NSString).appendingPathComponent($0)) }
             }
             .sorted { $0.modified > $1.modified }
             return (recents, projects)
         }.value
         recents = found.0
         projects = found.1
+    }
+
+    // MARK: Actions
+
+    private func launch(_ path: String) {
+        WelcomeWindowController.launch(folder: path, agents: agents, command: command)
+        onDone()
+    }
+
+    private func openOther() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: WelcomeWindowController.projectsRoot)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        launch(url.path)
+    }
+
+    private func cloneRepo() {
+        guard let url = Self.ask(
+            title: String(localized: "welcome.clone.title", defaultValue: "Clone a repository"),
+            message: String(
+                format: String(localized: "welcome.clone.message", defaultValue: "Paste a git URL. It is cloned into %@."),
+                (WelcomeWindowController.projectsRoot as NSString).abbreviatingWithTildeInPath
+            ),
+            placeholder: "https://github.com/owner/repo.git"
+        ) else { return }
+        let name = URL(string: url)?.deletingPathExtension().lastPathComponent
+            ?? (url as NSString).lastPathComponent.replacingOccurrences(of: ".git", with: "")
+        guard !name.isEmpty, !name.hasPrefix("-"), name != ".", name != "..", !name.contains("/") else {
+            problem = String(localized: "welcome.clone.badURL", defaultValue: "That doesn't look like a git URL.")
+            return
+        }
+        let destination = (WelcomeWindowController.projectsRoot as NSString).appendingPathComponent(name)
+        guard !FileManager.default.fileExists(atPath: destination) else {
+            launch(destination)
+            return
+        }
+        busy = String(format: String(localized: "welcome.clone.busy", defaultValue: "Cloning %@…"), name)
+        problem = nil
+        Task {
+            let result = await Self.git(["clone", "--", url, destination], in: WelcomeWindowController.projectsRoot)
+            busy = nil
+            if result == nil {
+                launch(destination)
+            } else {
+                problem = result
+            }
+        }
+    }
+
+    private func newProject() {
+        guard let name = Self.ask(
+            title: String(localized: "welcome.new.title", defaultValue: "New project"),
+            message: String(
+                format: String(localized: "welcome.new.message", defaultValue: "Creates a folder in %@ and runs git init."),
+                (WelcomeWindowController.projectsRoot as NSString).abbreviatingWithTildeInPath
+            ),
+            placeholder: "my-project"
+        ), !name.contains("/"), !name.hasPrefix(".") else { return }
+        let destination = (WelcomeWindowController.projectsRoot as NSString).appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(atPath: destination, withIntermediateDirectories: false)
+        } catch {
+            problem = error.localizedDescription
+            return
+        }
+        Task {
+            _ = await Self.git(["init", "--quiet"], in: destination)
+            launch(destination)
+        }
+    }
+
+    /// A one-field prompt; nil when cancelled or empty.
+    private static func ask(title: String, message: String, placeholder: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = placeholder
+        alert.accessoryView = field
+        alert.addButton(withTitle: String(localized: "welcome.ok", defaultValue: "Continue"))
+        alert.addButton(withTitle: String(localized: "welcome.cancel", defaultValue: "Cancel"))
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    /// Runs git with arguments (never a shell). Returns nil on success, else the error text.
+    private static func git(_ arguments: [String], in directory: String) async -> String? {
+        await Task.detached(priority: .userInitiated) { () -> String? in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = arguments
+            process.currentDirectoryURL = URL(fileURLWithPath: directory)
+            let errors = Pipe()
+            process.standardError = errors
+            process.standardOutput = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                return error.localizedDescription
+            }
+            guard process.terminationStatus != 0 else { return nil }
+            let text = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? "git exited with status \(process.terminationStatus)" : text
+        }.value
+    }
+}
+
+/// An action card: icon over a short label, lifted surface, brighter on hover.
+private struct WelcomeCard: View {
+    let symbol: String
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 16))
+                Text(title).font(.system(size: 12)).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(hovering ? 0.10 : 0.05))
+            )
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.1), value: hovering)
+    }
+}
+
+/// A recent-project row: name, then its folder, highlighted on hover.
+private struct WelcomeRecentRow: View {
+    let folder: WelcomeFolder
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text(folder.name).font(.system(size: 13)).lineLimit(1)
+                Text(folder.parent)
+                    .font(.system(size: 12, weight: .light))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 8)
+                Text(folder.modified, format: .relative(presentation: .named))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(hovering ? 0.07 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.1), value: hovering)
     }
 }

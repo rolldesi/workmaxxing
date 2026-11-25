@@ -1,0 +1,194 @@
+import Bonsplit
+import Foundation
+
+enum CmuxSurfaceTabBarBuiltInAction: String, Codable, Sendable, CaseIterable, Hashable {
+    case newWorkspace = "cmux.newWorkspace"
+    case newAgentChat = "cmux.newAgentChat"
+    case cloudVM = "cmux.cloudvm"
+    case newCloudWorkspace = "cmux.newCloudWorkspace"
+    case newCloudMachine = "cmux.newCloudMachine"
+    case mobileConnect = "cmux.mobileconnect"
+    case newTerminal = "cmux.newTerminal"
+    case newBrowser = "cmux.newBrowser"
+    case newSimulator = "cmux.newSimulator"
+    case splitRight = "cmux.splitRight"
+    case splitDown = "cmux.splitDown"
+    case copyWorkingDirectory = "cmux.copyWorkingDirectory"
+    case copyProjectRoot = "cmux.copyProjectRoot"
+    case copyScreen = "cmux.copyScreen"
+    case allowMoreAgentMessages = "cmux.allowMoreAgentMessages"
+    case openApp = "cmux.openApp"
+    case chooseBrowser = "cmux.chooseBrowser"
+
+    /// The fork's +10 button reads as text; every other built-in uses its symbol.
+    var defaultButtonIcon: CmuxButtonIcon {
+        self == .allowMoreAgentMessages ? .emoji("+10") : .symbol(defaultIcon)
+    }
+
+    init?(configID: String) {
+        switch configID {
+        case "cmux.newWorkspace", "newWorkspace":
+            self = .newWorkspace
+        case "cmux.newAgentChat", "cmux.agentChat", "newAgentChat", "new-agent-chat", "agentChat":
+            self = .newAgentChat
+        case "cmux.cloudvm", "cmux.cloudVM", "cloudVM", "cloudvm",
+             "cmux.newCloudVM", "cmux.newCloudVm", "newCloudVM", "newCloudVm",
+             "cmux.startCloudVM", "cmux.startCloudVm", "startCloudVM", "startCloudVm":
+            self = .cloudVM
+        case "cmux.newCloudWorkspace", "newCloudWorkspace":
+            self = .newCloudWorkspace
+        case "cmux.newCloudMachine", "newCloudMachine":
+            self = .newCloudMachine
+        case "cmux.mobileconnect", "cmux.mobileConnect", "mobileConnect", "mobileconnect",
+             "cmux.connectPhone", "connectPhone":
+            self = .mobileConnect
+        case "cmux.newTerminal", "newTerminal":
+            self = .newTerminal
+        case "cmux.newBrowser", "newBrowser":
+            self = .newBrowser
+        case "cmux.newSimulator", "newSimulator", "new-simulator", "simulator":
+            self = .newSimulator
+        case "cmux.splitRight", "splitRight":
+            self = .splitRight
+        case "cmux.splitDown", "splitDown":
+            self = .splitDown
+        case "cmux.copyWorkingDirectory", "copyWorkingDirectory":
+            self = .copyWorkingDirectory
+        case "cmux.copyProjectRoot", "copyProjectRoot":
+            self = .copyProjectRoot
+        case "cmux.copyScreen", "copyScreen":
+            self = .copyScreen
+        case "cmux.allowMoreAgentMessages", "allowMoreAgentMessages":
+            self = .allowMoreAgentMessages
+        case "cmux.openApp", "openApp", "cmux.apps", "apps":
+            self = .openApp
+        case "cmux.chooseBrowser", "chooseBrowser":
+            self = .chooseBrowser
+        default:
+            return nil
+        }
+    }
+
+    var configID: String {
+        rawValue
+    }
+
+    var resolvedConfigMetadata: (title: String, keywords: [String]) {
+        switch self {
+        case .newWorkspace:
+            return (String(localized: "command.newWorkspace.title", defaultValue: "New Workspace"), ["create", "new", "workspace"])
+        case .newAgentChat:
+            return (String(localized: "command.newAgentChat.title", defaultValue: "New agent chat"), ["create", "new", "agent", "chat", "browser", "codex", "claude"])
+        case .cloudVM:
+            return (String(localized: "command.cloudVM.title", defaultValue: "Open Base"), ["base", "cloud", "vm", "virtual", "machine", "remote"])
+        case .newCloudWorkspace:
+            return (String(localized: "command.newCloudWorkspace.title", defaultValue: "New Cloud Workspace"), ["new", "create", "cloud", "vm", "machine", "workspace", "remote"])
+        case .newCloudMachine:
+            return (String(localized: "command.newCloudMachine.title", defaultValue: "New Cloud Machine"), ["new", "create", "cloud", "vm", "machine", "workspace", "remote"])
+        case .mobileConnect:
+            return (
+                String(localized: "command.mobileConnect.title", defaultValue: "Open Mobile Pairing"),
+                ["tailscale", "iroh", "iphone", "ipad", "mobile", "phone", "pair", "connect", "qr"]
+            )
+        case .newTerminal:
+            return (String(localized: "command.newTerminalTab.title", defaultValue: "New Terminal Tab"), ["new", "terminal", "tab", "surface"])
+        case .newBrowser:
+            return (String(localized: "command.newBrowserTab.title", defaultValue: "New Browser Tab"), ["new", "browser", "tab", "surface"])
+        case .newSimulator:
+            return (String(localized: "command.newSimulatorPane.title", defaultValue: "New Simulator Pane"), ["new", "simulator", "iphone", "ipad", "ios", "surface"])
+        case .splitRight:
+            return (String(localized: "command.terminalSplitRight.title", defaultValue: "Split Right"), ["terminal", "split", "right"])
+        case .splitDown:
+            return (String(localized: "command.terminalSplitDown.title", defaultValue: "Split Down"), ["terminal", "split", "down"])
+        case .copyWorkingDirectory:
+            return (String(localized: "command.copyWorkingDirectory.title", defaultValue: "Copy Working Directory"), ["copy", "clipboard", "path", "directory", "cwd", "pwd"])
+        case .copyProjectRoot:
+            return (String(localized: "command.copyProjectRoot.title", defaultValue: "Copy Project Root"), ["copy", "clipboard", "project", "git", "root", "repository", "path"])
+        case .copyScreen:
+            return (String(localized: "command.copyScreen.title", defaultValue: "Copy Visible Screen"), ["copy", "clipboard", "screen", "output", "terminal", "visible"])
+        case .allowMoreAgentMessages:
+            return (String(localized: "command.allowMoreAgentMessages.title", defaultValue: "Allow 10 More Agent Messages"), ["agent", "message", "messages", "limit", "allow", "more", "pipe"])
+        case .chooseBrowser:
+            return (String(localized: "command.chooseBrowser.title", defaultValue: "Open Browser (Chrome or Safari)"), ["browser", "web", "chrome", "safari", "logins", "open"])
+        case .openApp:
+            return (String(localized: "command.openApp.title", defaultValue: "Open App or Style Box"), ["app", "apps", "spotify", "sticky", "note", "prompt", "queue", "markdown", "color", "outline", "enlarge"])
+        }
+    }
+
+    var defaultIcon: String {
+        switch self {
+        case .newWorkspace:
+            return "plus.square"
+        case .newAgentChat:
+            return "message"
+        case .cloudVM:
+            return "cloud"
+        case .newCloudWorkspace:
+            return "cloud.fill"
+        case .newCloudMachine:
+            return "cloud"
+        case .mobileConnect:
+            return "iphone"
+        case .newTerminal:
+            return "terminal"
+        case .newBrowser:
+            return "globe"
+        case .newSimulator:
+            return "iphone.gen3"
+        case .splitRight:
+            return "square.split.2x1"
+        case .splitDown:
+            return "square.split.1x2"
+        case .copyWorkingDirectory:
+            return "doc.on.doc"
+        case .copyProjectRoot:
+            return "arrow.triangle.branch"
+        case .copyScreen:
+            return "text.viewfinder"
+        case .allowMoreAgentMessages:
+            return "plus.bubble"
+        case .openApp:
+            return "square.grid.2x2"
+        case .chooseBrowser:
+            return "globe"
+        }
+    }
+
+    var bonsplitAction: BonsplitConfiguration.SplitActionButton.Action? {
+        switch self {
+        case .newWorkspace, .newAgentChat, .cloudVM, .newCloudWorkspace, .newCloudMachine, .mobileConnect, .newSimulator,
+             .copyWorkingDirectory, .copyProjectRoot, .copyScreen, .allowMoreAgentMessages, .openApp, .chooseBrowser:
+            return nil
+        case .newTerminal:
+            return .newTerminal
+        case .newBrowser:
+            return .newBrowser
+        case .splitRight:
+            return .splitRight
+        case .splitDown:
+            return .splitDown
+        }
+    }
+}
+
+extension CmuxSurfaceTabBarBuiltInAction {
+    /// The user-editable shortcut that triggers the same behavior as this
+    /// built-in action. Menus that list built-in actions read the live
+    /// `KeyboardShortcutSettings` value through this mapping, so a rebind or
+    /// an unbind in Settings or `cmux.json` shows up the next time the menu
+    /// opens. Actions with no cmux-owned shortcut return nil.
+    var shortcutAction: KeyboardShortcutSettings.Action? {
+        switch self {
+        case .newWorkspace: return .newTab
+        case .newCloudWorkspace: return .newCloudWorkspace
+        case .newCloudMachine: return .newCloudMachine
+        case .newTerminal: return .newSurface
+        case .newBrowser: return .openBrowser
+        case .splitRight: return .splitRight
+        case .splitDown: return .splitDown
+        case .newAgentChat, .cloudVM, .mobileConnect, .newSimulator,
+             .copyWorkingDirectory, .copyProjectRoot, .copyScreen, .allowMoreAgentMessages, .openApp, .chooseBrowser: return nil
+        }
+    }
+
+}
